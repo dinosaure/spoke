@@ -1,6 +1,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef __SPOKE_UTILS__
+#define __SPOKE_UTILS__
+
 int is_zero(const unsigned char *, const size_t nlen);
 
 #define LOAD64_LE(SRC) load64_le(SRC)
@@ -58,3 +61,5 @@ store64_le(uint8_t dst[8], uint64_t w)
 #endif
 
 #define COMPILER_ASSERT(X) (void) sizeof(char[(X) ? 1 : -1])
+
+#endif /* __SPOKE_UTILS__ */

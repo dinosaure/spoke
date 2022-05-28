@@ -124,7 +124,10 @@ let run ~password = match run ~password with
 
 let () = match Sys.argv with
   | [| _; password |] -> run ~password
-  | [| _; unix_domain; password |] ->
-    run_with_fifo (Unix.ADDR_UNIX unix_domain) ~password
+  | [| _; sockaddr; password |] ->
+    let sockaddr = 
+      try Unix.(ADDR_INET (inet_addr_of_string sockaddr, 9009))
+      with _ -> Unix.ADDR_UNIX sockaddr in
+    run_with_fifo sockaddr ~password
   | _ ->
     Fmt.epr "%s <unix-socket> password\n%!" Sys.argv.(0)

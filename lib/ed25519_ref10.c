@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "ed25519_ref10.h"
+#include "utils.h"
 
 static inline uint64_t
 load_3(const unsigned char *in)
@@ -2976,7 +2977,6 @@ ristretto255_from_hash(unsigned char s[32], const unsigned char h[64])
 }
 
 #include <caml/memory.h>
-#include <sodium.h>
 
 #define String_off(str, off) ((uint8_t*) String_val (str) + Long_val (off))
 #define Bytes_off(str, off) ((uint8_t*) Bytes_val (str) + Long_val (off))
