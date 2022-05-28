@@ -1,0 +1,9 @@
+(executable
+ (name main)
+ (modules main fiber)
+ (libraries logs logs.fmt fmt.tty hxd.string hxd.core spoke flow base64 sodium))
+
+(executable
+ (name mksock)
+ (modules mksock)
+ (libraries fmt unix))

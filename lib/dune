@@ -1,0 +1,17 @@
+(library
+ (name spoke)
+ (public_name spoke.core)
+ (modules spoke pbkdf2)
+ (foreign_stubs
+  (language c)
+  (flags :standard)
+  (names utils ed25519_ref10 xor))
+ (libraries digestif fmt))
+
+(library
+ (name flow)
+ (public_name spoke.flow)
+ (modules flow)
+ (libraries hxd.string hxd.core logs spoke.core))
+
+(include_subdirs unqualified)
