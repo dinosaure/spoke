@@ -6,12 +6,12 @@
   (language c)
   (flags :standard)
   (names utils ed25519_ref10 xor))
- (libraries digestif fmt))
+ (libraries mirage-crypto encore digestif fmt))
 
 (library
  (name flow)
  (public_name spoke.flow)
  (modules flow)
- (libraries hxd.string hxd.core logs spoke.core))
+ (libraries base64 hxd.string hxd.core ke mirage-flow logs spoke.core))
 
 (include_subdirs unqualified)

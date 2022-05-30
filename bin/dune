@@ -1,4 +1,4 @@
 (executable
  (name simulate)
  (modules simulate fiber)
- (libraries logs logs.fmt fmt.tty hxd.string hxd.core spoke flow base64))
+ (libraries mimic rresult tcpip.stack-socket logs logs.fmt fmt.tty hxd.string hxd.core spoke flow base64))

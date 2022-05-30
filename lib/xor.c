@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include <caml/memory.h>
+#include <caml/bigarray.h>
 
 static inline void xor_into (uint8_t *src, uint8_t *dst, size_t n) {
 /* see issue mirage/mirage-crypto#70 mirage/mirage-crypto#81 for alignment
@@ -37,9 +38,18 @@ static inline void xor_into (uint8_t *src, uint8_t *dst, size_t n) {
 }
 
 #define String_off(str, off) ((uint8_t*) String_val (str) + Long_val (off))
+#define Bigarray_off(ba, off) ((uint8_t*) Caml_ba_data_val (ba) + Long_val (off))
 
 CAMLprim value
 spoke_xor_into_generic (value src, value src_off, value dst, value dst_off, value len) {
   xor_into (String_off (src, src_off), String_off (dst, dst_off), Long_val (len));
   return Val_unit;
 }
+
+CAMLprim value
+spoke_xor_into_generic_bigarray (value src, value src_off, value dst, value dst_off, value len) {
+  xor_into (Bigarray_off (src, src_off), Bigarray_off (dst, dst_off), Long_val (len));
+  return Val_unit;
+}
+
+

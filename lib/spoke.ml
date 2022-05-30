@@ -1,3 +1,40 @@
+exception Invalid_algorithm
+exception Invalid_cipher
+exception Invalid_hash
+
+external bytes_get_uint8  : bytes -> int -> int = "%bytes_safe_get"
+
+external bytes_set_uint8  : bytes -> int -> int -> unit   = "%bytes_safe_set"
+external bytes_set_uint16 : bytes -> int -> int -> unit   = "%caml_bytes_set16"
+external bytes_set_uint32 : bytes -> int -> int32 -> unit = "%caml_bytes_set32"
+external bytes_set_uint64 : bytes -> int -> int64 -> unit = "%caml_bytes_set64"
+
+external string_get_uint16 : string -> int -> int   = "%caml_string_get16"
+external string_get_uint64 : string -> int -> int64 = "%caml_string_get64"
+
+external swap16 : int -> int = "%bswap16"
+external swap64 : int64 -> int64 = "%bswap_int64"
+
+let bytes_set_uint16_be =
+  if Sys.big_endian
+  then bytes_set_uint16
+  else fun buf off v -> bytes_set_uint16 buf off (swap16 v)
+
+let string_get_uint16_be =
+  if Sys.big_endian
+  then string_get_uint16
+  else fun str off -> swap16 (string_get_uint16 str off)
+
+let bytes_set_uint64_be =
+  if Sys.big_endian
+  then bytes_set_uint64
+  else fun buf off v -> bytes_set_uint64 buf off (swap64 v)
+
+let string_get_uint64_be =
+  if Sys.big_endian
+  then string_get_uint64
+  else fun str off -> swap64 (string_get_uint64 str off)
+
 type shared_keys = string * string
 type public = string
 type secret = string
@@ -31,16 +68,6 @@ let ed25519_scalarmult_base hash ~off =
   spoke_ed25519_scalarmult_base buf ~dst_off:0 hash ~src_off:off ;
   Scalar (Bytes.unsafe_to_string buf)
 
-external bytes_get_uint8  : bytes -> int -> int = "%bytes_safe_get"
-
-external bytes_set_uint8  : bytes -> int -> int -> unit   = "%bytes_safe_set"
-external bytes_set_uint16 : bytes -> int -> int -> unit   = "%caml_bytes_set16"
-external bytes_set_uint32 : bytes -> int -> int32 -> unit = "%caml_bytes_set32"
-external bytes_set_uint64 : bytes -> int -> int64 -> unit = "%caml_bytes_set64"
-
-external string_get_uint16 : string -> int -> int   = "%caml_string_get16"
-external string_get_uint64 : string -> int -> int64 = "%caml_string_get64"
-
 let random_buffer ?g buf =
   let g = match g with
     | Some g -> g
@@ -62,19 +89,45 @@ let random_bytes ?g len =
   random_buffer ?g buf ; Bytes.unsafe_to_string buf
 
 let version = 1
+
 let version_string =
   let buf = Bytes.create 2 in
   bytes_set_uint16 buf 0 1 ; Bytes.unsafe_to_string buf
 
 type _ algorithm = Pbkdf2 : int algorithm
+type a = Algorithm : 'a algorithm -> a
+
+type _ aead =
+  | GCM : Mirage_crypto.Cipher_block.AES.GCM.key aead
+  | CCM : Mirage_crypto.Cipher_block.AES.CCM.key aead
+  | ChaCha20_Poly1305 : Mirage_crypto.Chacha20.key aead
+
+type cipher = AEAD : 'k aead -> cipher
 type hash = Hash : 'k Digestif.hash -> hash
 
-let algorithm_to_uint16 : type a. a algorithm -> int = function
-  | Pbkdf2 -> 2
+let int_of_algorithm : type a. a algorithm -> int = function Pbkdf2 -> 2
+let algorithm_of_int : int -> a = function
+  | 2 -> Algorithm Pbkdf2
+  | _ -> raise Invalid_algorithm
 
-let hash_to_uint64 : type k. k Digestif.hash -> int64 = function
-  | Digestif.SHA256 -> 4L
+let int_of_hash : type k. k Digestif.hash -> int = function
+  | Digestif.SHA256 -> 4
   | _ -> assert false (* TODO *)
+
+let hash_of_int : int -> hash = function
+  | 4 -> Hash Digestif.SHA256
+  | _ -> raise Invalid_hash
+
+let int_of_cipher = function
+  | AEAD GCM -> 0
+  | AEAD CCM -> 1
+  | AEAD ChaCha20_Poly1305 -> 2
+
+let cipher_of_int = function
+  | 0 -> AEAD GCM
+  | 1 -> AEAD CCM
+  | 2 -> AEAD ChaCha20_Poly1305
+  | _ -> raise Invalid_cipher
 
 let keys
   : type a. salt:string -> hash:hash -> string -> algorithm:a algorithm -> a -> keys * int64
@@ -94,34 +147,83 @@ let keys
     | Pbkdf2 -> Int64.of_int arguments in
   { _M; _N; _L; h_K; h_L; }, arguments
 
+let uint16_be_to_string v =
+  let buf = Bytes.create 2 in
+  bytes_set_uint16_be buf 0 v ;
+  Bytes.unsafe_to_string buf
+
+let pbkdf2 = uint16_be_to_string (int_of_algorithm Pbkdf2)
+
+let uint64_be_to_string v =
+  let buf = Bytes.create 8 in
+  bytes_set_uint64_be buf 0 v ;
+  Bytes.unsafe_to_string buf
+
+module Format = struct
+  open Encore
+  open Syntax
+
+  let uint16be = Bij.v
+    ~fwd:(fun str -> string_get_uint16_be str 0)
+    ~bwd:uint16_be_to_string
+
+  let uint64be = Bij.v
+    ~fwd:(fun str -> string_get_uint64_be str 0)
+    ~bwd:uint64_be_to_string
+
+  let version = uint16be <$> fixed 2
+
+  let algorithm_and_arguments = choice
+    [ const pbkdf2 <*> (uint64be <$> fixed 8) ]
+
+  let safe f x = try f x with _ -> raise Bij.Bijection
+
+  let cipher =
+    let cipher = Bij.v ~fwd:(safe cipher_of_int) ~bwd:int_of_cipher in
+    (Bij.compose uint16be cipher) <$> fixed 2
+
+  let ciphers = cipher <*> cipher
+
+  let hash =
+    let hash = Bij.v ~fwd:(safe hash_of_int) ~bwd:(fun (Hash hash) -> int_of_hash hash) in
+    (Bij.compose uint16be hash) <$> fixed 2
+
+  let salt = fixed 16
+
+  let scalar =
+    let scalar = Bij.v ~fwd:(fun str -> Scalar str) ~bwd:(fun (Scalar str) -> str) in
+    scalar <$> fixed 32
+
+  let secret =
+    (Bij.obj5 <$> (version <*> algorithm_and_arguments <*> ciphers <*> hash <*> salt))
+    <*>
+    (Bij.obj4 <$> (scalar <*> scalar <*> (fixed 32) <*> scalar))
+
+  let public =
+    Bij.obj5 <$> (version <*> algorithm_and_arguments <*> ciphers <*> hash <*> salt)
+
+  let secret_to_string v = Encore.Lavoisier.emit_string v (Encore.to_lavoisier secret)
+  let secret_of_string str = Angstrom.parse_string ~consume:All (Encore.to_angstrom secret) str
+  let public_to_string v = Encore.Lavoisier.emit_string v (Encore.to_lavoisier public)
+  let public_of_string str = Angstrom.parse_string ~consume:All (Encore.to_angstrom public) str
+end
+
 let generate : type a.
-  ?hash:hash -> ?g:Random.State.t -> password:string -> algorithm:a algorithm -> a -> string * string 
-  = fun ?(hash= Hash Digestif.SHA256) ?g ~password ~algorithm arguments ->
+  ?hash:hash -> ?ciphers:cipher * cipher -> ?g:Random.State.t -> password:string -> algorithm:a algorithm -> a -> string * string 
+  = fun ?(hash= Hash Digestif.SHA256) ?(ciphers= AEAD GCM, AEAD GCM) ?g ~password ~algorithm arguments ->
   let salt = random_bytes ?g 16 in
   let keys, arguments = keys ~salt ~hash password ~algorithm arguments in
   let Hash hash = hash in
-  let secret = Bytes.create (2 + 2 + 8 + 8 + 16 + 32 + 32 + 32 + 32) in
-  bytes_set_uint16 secret 0 version ;
-  bytes_set_uint16 secret 2 (algorithm_to_uint16 Pbkdf2) ;
-  bytes_set_uint64 secret 4 arguments ; (* count *)
-  bytes_set_uint64 secret 12 (hash_to_uint64 hash) ;
-  Bytes.blit_string salt 0 secret 20 16 ;
-  Bytes.blit_string (scalar keys._M) 0 secret 36 32 ;
-  Bytes.blit_string (scalar keys._N) 0 secret 68 32 ;
-  Bytes.blit_string keys.h_K 0 secret 100 32 ;
-  Bytes.blit_string (scalar keys._L) 0 secret 132 32 ;
-  let public = Bytes.create (2 + 2 + 8 + 8 + 16) in
-  bytes_set_uint16 public 0 version ;
-  bytes_set_uint16 public 2 (algorithm_to_uint16 Pbkdf2) ;
-  bytes_set_uint64 public 4 arguments ;
-  bytes_set_uint64 public 12 (hash_to_uint64 hash) ;
-  Bytes.blit_string salt 0 public 20 16 ;
-  Bytes.unsafe_to_string secret, Bytes.unsafe_to_string public
+
+  let secret = Format.secret_to_string
+    ((version, (pbkdf2, arguments), ciphers, Hash hash, salt),
+     (keys._M, keys._N, keys.h_K, keys._L)) in
+  let public = Format.public_to_string
+    (version, (pbkdf2, arguments), ciphers, Hash hash, salt) in
+  secret, public
 
 let public_to_string str = str
 let public_of_string str = Ok str
-
-type a = Algorithm : 'a algorithm -> a
 
 let zero = String.make 32 '\000'
 
@@ -153,46 +255,47 @@ let ed25519_add (Scalar f) (Scalar g) =
   spoke_ed25519_add buf ~dst_off:0 f g ;
   Scalar (Bytes.unsafe_to_string buf)
 
-exception Invalid_version
-exception Invalid_algorithm
-exception Invalid_hash
-
 type client =
-  { h_K : string
-  ; h_L : string
-  ; _N  : scalar
-  ; x   : string
-  ; _X  : scalar }
+  { h_K     : string
+  ; h_L     : string
+  ; _N      : scalar
+  ; x       : string
+  ; _X      : scalar
+  ; ciphers : cipher * cipher }
 
 let hello ?g ~public password =
-  let version' = string_get_uint16 public 0 in
-  if version' <> version
-  then raise Invalid_version ;
-  let Algorithm algorithm = match string_get_uint16 public 2 with
-    | 2 -> Algorithm Pbkdf2
-    | _ -> raise Invalid_algorithm in
-  let Hash hash = match string_get_uint64 public 12 with
-    | 4L -> Hash Digestif.SHA256
-    | _  -> raise Invalid_hash in
-  let salt = String.sub public 20 16 in
-  let keys, _arguments = match algorithm, string_get_uint64 public 4 with
-    | Pbkdf2, count ->
-      let count = Int64.to_int count in
-      keys ~salt ~hash:(Hash hash) password ~algorithm count in
-  let x = random_scalar ?g () in
-  let gx = ed25519_scalarmult_base_noclamp x ~off:0 in
-  let _X = ed25519_add gx keys._M in
-  { h_K= keys.h_K; h_L= keys.h_L; _N= keys._N; x; _X }, scalar _X
+  match Format.public_of_string public with
+  | Error _ -> Error `Invalid_public_packet
+  | Ok (_version, (algorithm, arguments), ciphers, Hash hash, salt) ->
+    let keys, _arguments =
+      match algorithm_of_int (string_get_uint16_be algorithm 0), arguments with
+      | Algorithm Pbkdf2, count ->
+        let count = Int64.to_int count in
+        let algorithm = Pbkdf2 in
+        keys ~salt ~hash:(Hash hash) password ~algorithm count in
+    let x = random_scalar ?g () in
+    let gx = ed25519_scalarmult_base_noclamp x ~off:0 in
+    let _X = ed25519_add gx keys._M in
+    Ok ({ h_K= keys.h_K; h_L= keys.h_L; _N= keys._N; x; _X; ciphers }, scalar _X)
+
+let ciphers_of_public public =
+  match Format.public_of_string public with
+  | Error _ -> Error `Invalid_public_packet
+  | Ok (_, _, ciphers, _, _) -> Ok ciphers
 
 type error =
   [ `Point_is_not_on_prime_order_subgroup
   | `Invalid_client_validator
-  | `Invalid_server_validator ]
+  | `Invalid_server_validator
+  | `Invalid_public_packet
+  | `Invalid_secret_packet ]
 
 let pp_error ppf = function
   | `Point_is_not_on_prime_order_subgroup -> Fmt.pf ppf "Point is not on prime-order subgroup"
   | `Invalid_client_validator -> Fmt.pf ppf "Invalid client validator"
   | `Invalid_server_validator -> Fmt.pf ppf "Invalid server validator"
+  | `Invalid_public_packet -> Fmt.pf ppf "Invalid public packet"
+  | `Invalid_secret_packet -> Fmt.pf ppf "Invalid secret packet"
 
 external spoke_ed25519_scalarmult_noclamp
   : bytes -> string -> src_off:int -> point:string -> bool
@@ -261,31 +364,24 @@ let ed25519_sub (Scalar f) (Scalar g) =
 let ( let* ) = Result.bind
 
 type server =
-  { validator : string
-  ; shared_keys : string * string }
+  { validator   : string
+  ; shared_keys : string * string
+  ; ciphers     : cipher * cipher }
 
 let server_compute ?g ~secret ~identity packet =
-  let _version' = string_get_uint16 secret 0 in
-  let Algorithm _algorithm = match string_get_uint16 secret 2 with
-    | 2 -> Algorithm Pbkdf2
-    | _ -> raise Invalid_algorithm in
-  let Hash _hash = match string_get_uint64 secret 12 with
-    | 4L -> Hash Digestif.SHA256
-    | _  -> raise Invalid_hash in
-  let _salt = String.sub secret 20 16 in
-  let _M = Scalar (String.sub secret 36 32) in
-  let _N = Scalar (String.sub secret 68 32) in
-  let h_K = String.sub secret 100 32 in
-  let _L = Scalar (String.sub secret 132 32) in
-  let y = random_scalar ?g () in
-  let gy = ed25519_scalarmult_base_noclamp y ~off:0 in
-  let _Y = ed25519_add gy _N in
-  let _X = Scalar packet in
-  let gx = ed25519_sub _X _M in
-  let* _Z = ed25519_scalarmult_noclamp y ~off:0 ~point:gx in
-  let* _V = ed25519_scalarmult_noclamp y ~off:0 ~point:_L in
-  let shared_keys, validators = shared_keys_and_validators ~identity _X _Y _Z h_K _V in
-  Ok ({ shared_keys; validator= snd validators; }, ((scalar _Y) ^ (fst validators)))
+  match Format.secret_of_string secret with
+  | Error _ -> Error `Invalid_secret_packet
+  | Ok ((_version, (_algorithm, _arguments), ciphers, _hash, _salt),
+        (_M, _N, h_K, _L)) ->
+    let y = random_scalar ?g () in
+    let gy = ed25519_scalarmult_base_noclamp y ~off:0 in
+    let _Y = ed25519_add gy _N in
+    let _X = Scalar packet in
+    let gx = ed25519_sub _X _M in
+    let* _Z = ed25519_scalarmult_noclamp y ~off:0 ~point:gx in
+    let* _V = ed25519_scalarmult_noclamp y ~off:0 ~point:_L in
+    let shared_keys, validators = shared_keys_and_validators ~identity _X _Y _Z h_K _V in
+    Ok ({ shared_keys; validator= snd validators; ciphers; }, ((scalar _Y) ^ (fst validators)))
 
 let client_compute ~client ~identity packet =
   let client_validator = String.sub packet 32 (String.length packet - 32) in
