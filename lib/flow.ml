@@ -12,6 +12,11 @@ let ctx () =
   ; b_buffer= Bytes.create 128
   ; b_pos= 0 }
 
+let remaining_bytes_of_ctx { a_pos; a_max; a_buffer; _ } =
+  if a_pos >= a_max
+  then None
+  else Some (Bytes.sub_string a_buffer a_pos (a_max - a_pos))
+
 type error =
   [ `Not_enough_space
   | `End_of_input
@@ -139,14 +144,17 @@ type cfg =
 let handshake_client ctx
   ?g ~identity password =
   let* public = recv ctx ~len:34 in
+  Logs.debug (fun m -> m "[c] <~ @[<hov>%a@]" (Hxd_string.pp Hxd.default) public) ;
   let+ public = Spoke.public_of_string public in
   let+ ciphers = Spoke.ciphers_of_public public in
   let+ client, packet = Spoke.hello ?g ~public password in
+  Logs.debug (fun m -> m "[c] ~> @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
   let* () = send ctx packet in
   let* packet = recv ctx ~len:96 in
-  Logs.debug (fun m -> m "[o] <~ @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
+  Logs.debug (fun m -> m "[c] <~ @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
   let+ shared_keys, packet = Spoke.client_compute
     ~client ~identity packet in
+  Logs.debug (fun m -> m "[c] ~> @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
   let* () = send ctx packet in
   Logs.debug (fun m -> m "Client terminates.") ;
   return (ciphers, shared_keys)
@@ -156,14 +164,16 @@ let handshake_server ctx
   let secret, public = Spoke.generate ?g ~password
     ~algorithm arguments in
   let+ ciphers = Spoke.ciphers_of_public public in
+  Logs.debug (fun m -> m "[s] ~> @[<hov>%a@]" (Hxd_string.pp Hxd.default) (Spoke.public_to_string public)) ;
   let* () = send ctx (Spoke.public_to_string public) in
   let* packet = recv ctx ~len:32 in
-  Logs.debug (fun m -> m "[o] <~ @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
+  Logs.debug (fun m -> m "[s] <~ @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
   let+ server, packet = Spoke.server_compute ~secret ~identity
     packet in
+  Logs.debug (fun m -> m "[s] ~> @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
   let* () = send ctx packet in
   let* packet = recv ctx ~len:64 in
-  Logs.debug (fun m -> m "[o] <~ @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
+  Logs.debug (fun m -> m "[s] <~ @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
   let+ shared_keys = Spoke.server_finalize ~server packet in
   Logs.debug (fun m -> m "Server terminates.") ;
   return (ciphers, shared_keys)
@@ -195,22 +205,36 @@ module Make (Flow : Mirage_flow.S) = struct
     | Ok v -> Ok v
     | Error err -> Error (f err)
 
-  type symmetric = Symmetric : { key : 'k; nonce : Cstruct.t ref; block_len : int; impl : 'k cipher_block } -> symmetric
+  type symmetric = Symmetric : { key : 'k
+                               ; nonce : Cstruct.t ref
+                               ; block_len : int
+                               ; cipher_len : int
+                               ; impl : 'k cipher_block } -> symmetric
 
   let symmetric_of_key_nonce_and_cipher key_nonce (Spoke.AEAD aead) =
     let key_len = match aead with
       | Spoke.GCM -> 32
       | Spoke.CCM -> 32
       | Spoke.ChaCha20_Poly1305 -> 32 in
+    let nonce_len = match aead with
+      | Spoke.GCM -> 12
+      | Spoke.CCM -> 12
+      | Spoke.ChaCha20_Poly1305 -> assert false (* TODO *) in
+    let cipher_len = match aead with
+      | Spoke.GCM -> 32
+      | Spoke.CCM -> 32
+      | Spoke.ChaCha20_Poly1305 -> assert false (* TODO *) in
     let module Cipher_block = (val module_of aead) in
     let key = Cstruct.of_string ~off:0 ~len:key_len key_nonce in
     Logs.debug (fun m -> m "Private key: %s"
       (Base64.encode_exn (String.sub key_nonce 0 key_len))) ;
     let key = Cipher_block.of_secret key in
-    let nonce = Cstruct.of_string ~off:key_len ~len:(String.length key_nonce - key_len) key_nonce in
+    let nonce = Cstruct.of_string ~off:key_len ~len:nonce_len key_nonce in
     let block_len = 16 in
     Symmetric { key; nonce= { contents= nonce }
-              ; block_len; impl= (module Cipher_block) }
+              ; block_len
+              ; cipher_len
+              ; impl= (module Cipher_block) }
 
   type flow =
     { flow : Flow.flow
@@ -252,22 +276,33 @@ module Make (Flow : Mirage_flow.S) = struct
   let client_of_flow ?g ~identity ~password flow =
     let ctx = ctx () in
     let queue = Ke.Rke.create ~capacity:128 Bigarray.char in
-    run queue flow (handshake_client ctx ?g ~identity password) >>? fun ((cipher0, cipher1), (k0, k1)) ->
-    Ke.Rke.clear queue ;
+    run queue flow (handshake_client ctx ?g ~identity password)
+    >>? fun ((cipher0, cipher1), (k0, k1)) ->
+    let rem = remaining_bytes_of_ctx ctx in
+    let rem = Option.value ~default:"" rem in
     let recv = symmetric_of_key_nonce_and_cipher k0 cipher0 in
     let send = symmetric_of_key_nonce_and_cipher k1 cipher1 in
     let recv_queue = Ke.Rke.create ~capacity:0x1000 Bigarray.char in
+    let blit src src_off dst dst_off len =
+      Bigstringaf.blit_from_string src ~src_off dst ~dst_off ~len in
+    Ke.Rke.N.push recv_queue ~blit ~length:String.length rem ;
     let send_queue = Ke.Rke.create ~capacity:0x1000 Bigarray.char in
     Lwt.return_ok { flow; recv; send; recv_queue; send_queue; }
 
   let server_of_flow ?g ~cfg ~identity ~password flow =
     let ctx = ctx () in
     let queue = Ke.Rke.create ~capacity:128 Bigarray.char in
-    run queue flow (handshake_server ctx ?g ~identity ~password cfg) >>? fun ((cipher0, cipher1), (k0, k1)) ->
-    Ke.Rke.clear queue ;
-    let recv = symmetric_of_key_nonce_and_cipher k0 cipher0 in
-    let send = symmetric_of_key_nonce_and_cipher k1 cipher1 in
+    run queue flow (handshake_server ctx ?g ~identity ~password cfg)
+    >>? fun ((cipher0, cipher1), (k0, k1)) ->
+    let rem = remaining_bytes_of_ctx ctx in
+    let rem = Option.value ~default:"" rem in
+    Logs.debug (fun m -> m "Remains %d byte(s) from the client." (String.length rem)) ;
+    let recv = symmetric_of_key_nonce_and_cipher k1 cipher1 in
+    let send = symmetric_of_key_nonce_and_cipher k0 cipher0 in
     let recv_queue = Ke.Rke.create ~capacity:0x1000 Bigarray.char in
+    let blit src src_off dst dst_off len =
+      Bigstringaf.blit_from_string src ~src_off dst ~dst_off ~len in
+    Ke.Rke.N.push recv_queue ~blit ~length:String.length rem ;
     let send_queue = Ke.Rke.create ~capacity:0x1000 Bigarray.char in
     Lwt.return_ok { flow; recv; send; recv_queue; send_queue; }
 
@@ -310,31 +345,37 @@ module Make (Flow : Mirage_flow.S) = struct
     xor_into (Cstruct.to_bigarray nonce) ~src_off:0
       (Cstruct.to_bigarray res) ~dst_off:0 ~len ; res
 
-  let rec read flow queue (Symmetric { key; nonce; block_len; impl= (module Cipher_block) } as symmetric) =
-    if Ke.Rke.length queue < block_len
-    then Flow.read flow >>= function
+  let rec read flow queue
+    (Symmetric { key; nonce; cipher_len; impl= (module Cipher_block); _ } as symmetric) =
+    if Ke.Rke.length queue < cipher_len
+    then begin
+      Logs.debug (fun m -> m "Asking for more bytes (%d byte(s))" (Ke.Rke.length queue)) ;
+      Flow.read flow >>= function
       | Ok `Eof -> Lwt.return_ok `Eof
       | Ok (`Data cs) ->
         Ke.Rke.N.push queue ~blit:blit0 ~length:Cstruct.length cs ;
         read flow queue symmetric
       | Error err -> Lwt.return_error (`Flow err)
-    else
-      let block = Cstruct.create block_len in
+    end else begin
+      Logs.debug (fun m -> m "Start to decrypt %d byte(s)." (Ke.Rke.length queue)) ;
+      let block = Cstruct.create cipher_len in
       let rec go blocks =
         fill_block block queue ;
         Logs.debug (fun m -> m "Decrypt @[<hov>%a@]"
           (Hxd_string.pp Hxd.default) (Cstruct.to_string block)) ;
         match Cipher_block.authenticate_decrypt ~key ~nonce:!nonce block with
         | Some decrypted ->
+          Logs.debug (fun m -> m "Decrypted @[<hov>%a@]" (Hxd_string.pp Hxd.default) (Cstruct.to_string decrypted)) ;
           nonce := xor !nonce ;
-          if Ke.Rke.length queue >= block_len then go (decrypted :: blocks)
+          if Ke.Rke.length queue >= cipher_len then go (decrypted :: blocks)
           else Lwt.return_ok (List.rev blocks)
         | None -> Lwt.return_error `Corrupted in
       go [] >>? fun blocks ->
       let data = List.fold_left Cstruct.append Cstruct.empty blocks in
-      Lwt.return_ok (`Data data)
+      Lwt.return_ok (`Data data) end
 
-  let write flow queue (Symmetric { key; nonce; block_len; impl= (module Cipher_block) }) data =
+  let write flow queue
+    (Symmetric { key; nonce; block_len; impl= (module Cipher_block); _ }) data =
     Ke.Rke.N.push queue ~blit:blit0 ~length:Cstruct.length data ;
     let block = Cstruct.create block_len in
     let rec go blocks =
@@ -345,13 +386,13 @@ module Make (Flow : Mirage_flow.S) = struct
                (Base64.encode_exn (Cstruct.to_string !nonce))
                (Hxd_string.pp Hxd.default) (Cstruct.to_string block))
            ; let encrypted = Cipher_block.authenticate_encrypt ~key ~nonce:!nonce block in
-             Logs.debug (fun m -> m "Data encrypted\n%!")
+             Logs.debug (fun m -> m "Data encrypted")
            ; nonce := xor !nonce
            ; go (encrypted :: blocks) )
       else List.rev blocks in
     let blocks = go [] in
     let blocks = List.fold_left Cstruct.append Cstruct.empty blocks in
-    Logs.debug (fun m -> m "send @[<hov>%a@]"
+    Logs.debug (fun m -> m "Send @[<hov>%a@]"
       (Hxd_string.pp Hxd.default) (Cstruct.to_string blocks)) ;
     Flow.write flow blocks >>= function
     | Ok () -> Lwt.return_ok ()

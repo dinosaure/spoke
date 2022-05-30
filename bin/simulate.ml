@@ -90,6 +90,7 @@ let handler flow =
       sendline flow "ping" >>? fun () -> go flow queue
     | (`Line line) ->
       sendline flow "%s" line >>? fun () -> go flow queue in
+  Logs.debug (fun m -> m "Start to handle our client.") ;
   go flow queue >>= fun res ->
   Mimic.close flow >>= fun () -> Lwt.return res
 
@@ -210,6 +211,7 @@ let service ?g password =
       ~cfg:Spoke.(Cfg (Pbkdf2, 16))
       ~identity:(identity, identity)
       ~password fd >>? fun fd ->
+    Logs.debug (fun m -> m "Handshake done!") ;
     Lwt.return_ok (REPR.T fd) in
   let close t = Lwt_unix.close t in
   { accept; close; }
