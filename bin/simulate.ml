@@ -22,79 +22,156 @@ open Lwt.Infix
 
 let ( >>? ) = Lwt_result.bind
 
-let line_of_queue queue =
-  let blit src src_off dst dst_off len =
-    Bigstringaf.blit_to_bytes src ~src_off dst ~dst_off ~len in
-  let exists ~p queue =
-    let pos = ref 0 and res = ref (-1) in
-    Ke.Rke.iter (fun chr -> if p chr && !res = -1 then res := !pos
-                          ; incr pos) queue ;
-    if !res = -1 then None else Some !res in
-  match exists ~p:((=) '\n') queue with
-  | None -> None
-  | Some 0 -> Ke.Rke.N.shift_exn queue 1 ; Some ""
-  | Some pos ->
-    let tmp = Bytes.create pos in
-    Ke.Rke.N.keep_exn queue ~blit ~length:Bytes.length ~off:0 ~len:pos tmp ;
-    Ke.Rke.N.shift_exn queue (pos + 1) ;
-    match Bytes.get tmp (pos - 1) with
-    | '\r' -> Some (Bytes.sub_string tmp 0 (pos - 1))
-    | _ -> Some (Bytes.unsafe_to_string tmp)
+let client ~ctx fd fd_length = 
+  let queue, _ = Ke.Rke.Weighted.create ~capacity:0x1000 Bigarray.char in
+  let buf = Bytes.create 0x1000 in
+  let close = ref false in
+  let mutex = Lwt_mutex.create () in
+  let condition = Lwt_condition.create () in
 
-let rec getline flow queue =
-  let blit src src_off dst dst_off len =
-    let src = Cstruct.to_bigarray src in
-    Bigstringaf.blit src ~src_off dst ~dst_off ~len in
-  match line_of_queue queue with
-  | Some line -> Lwt.return_ok (`Line line)
-  | None ->
-    Mimic.read flow >>= function
-    | Ok `Eof -> Lwt.return_ok `Close
-    | Ok (`Data v) ->
-      Ke.Rke.N.push queue ~blit ~length:Cstruct.length ~off:0 v ;
-      getline flow queue
-    | Error err -> Lwt.return_error (R.msgf "%a" Mimic.pp_error err)
+  let rec producer flow =
+    Lwt_unix.read fd buf 0 (Bytes.length buf) >>= function
+    | 0 ->
+      Lwt_mutex.with_lock mutex @@ begin fun () ->
+      close := true ;
+      Lwt_condition.broadcast condition `Closed ;
+      Lwt.return_unit end >>= fun () ->
+      Lwt.return_ok ()
+    | len ->
+      let rec fill (buf, off, max) =
+        Lwt_mutex.with_lock mutex @@ begin fun () ->
+        let blit src src_off dst dst_off len =
+          Bigstringaf.blit_from_bytes src ~src_off dst ~dst_off ~len in
+        match min len (Ke.Rke.Weighted.available queue) with
+        | 0 ->
+          Lwt_condition.signal condition `Full ;
+          Lwt.return (`Redo (buf, off, max))
+        | len ->
+          let _ = Ke.Rke.Weighted.N.push_exn queue ~blit
+            ~length:Bytes.length ~off ~len buf in
+          Logs.debug (fun m -> m "Signal `Filled.") ;
+          Lwt_condition.signal condition `Filled ;
+          if max - len = 0
+          then Lwt.return `Next 
+          else Lwt.return (`Redo (buf, off, max - len)) end >>= function
+        | `Redo v -> Lwt.pause () >>= fun () -> fill v
+        | `Next -> Lwt.return_unit in
+      Mimic.write flow (Cstruct.of_string (Bytes.sub_string buf 0 len)) >>? fun () ->
+      fill (buf, 0, len) >>= fun () -> producer flow in
 
-let sendline flow fmt =
-  let send str = Mimic.write flow (Cstruct.of_string str) >>= function
-    | Ok _ as v -> Lwt.return v
-    | Error err -> Lwt.return_error (R.msgf "%a" Mimic.pp_write_error err) in
-  Fmt.kstr send (fmt ^^ "\r\n")
+  let rec consumer flow checked =
+    Lwt_mutex.with_lock mutex @@ begin fun () ->
+    let rec wait res =
+      if Ke.Rke.Weighted.is_empty queue && not !close
+      then Lwt_condition.wait ~mutex condition >>= wait
+      else Lwt.return res in
+    Logs.debug (fun m -> m "Waiting for more data.") ;
+    wait `Filled >>= function
+    | (`Filled | `Full | `Closed) as state ->
+      ( Mimic.read flow >>? function
+      | `Eof ->
+        if state = `Closed && Ke.Rke.Weighted.is_empty queue
+        then Lwt.return_ok `Closed
+        else Lwt.return_error (R.msgf "Remaining untrusted contents!")
+      | `Data cs ->
+        let str0 = Cstruct.to_string cs in
+        let blit src src_off dst dst_off len =
+          Bigstringaf.blit_to_bytes src ~src_off dst ~dst_off ~len in
+        let len = String.length str0 in
+        let buf = Bytes.create len in
+        Ke.Rke.Weighted.N.keep_exn queue ~blit ~length:Bytes.length buf ~len ;
+        Ke.Rke.Weighted.N.shift_exn queue len ;
+        if Eqaf.compare_be str0 (Bytes.unsafe_to_string buf) = 0
+        then ( Logs.debug (fun m -> m "Block received (%d byte(s)) is integre." (Cstruct.length cs)) 
+             ; if checked + len = fd_length
+               then Lwt.return_ok `Closed
+               else Lwt.return_ok (`Continue (checked + len)) )
+        else Lwt.return_error (R.msgf "Contents are corrupted!") ) end >>? function
+    | `Closed -> Lwt.return_ok ()
+    | `Continue checked -> Lwt.pause () >>= fun () -> consumer flow checked in
 
-let client ~ctx ic =
-  let rec go flow queue = match input_line ic with
-    | line ->
-      if ic != stdin then Fmt.pr "> %s\n%!" line ;
-      sendline flow "%s" line >>? fun () ->
-      ( getline flow queue >>? function
-      | `Close -> Lwt.return_ok ()
-      | `Line v ->
-        Fmt.pr "<~ %s\n%!" v ;
-        if ic == stdin then Fmt.pr "> %!" ;
-        go flow queue )
-    | exception End_of_file -> Lwt.return_ok () in
   Mimic.resolve ctx >>? fun flow ->
-  let queue = Ke.Rke.create ~capacity:0x1000 Bigarray.char in
-  if ic == stdin then Fmt.pr "> %!" ;
-  go flow queue >>= fun res ->
-  Mimic.close flow >>= fun () -> Lwt.return res
+  Lwt.both (producer flow) (consumer flow 0) >>= fun res ->
+  Logs.debug (fun m -> m "Close the connection with the server.") ;
+  Mimic.close flow >>= fun () -> match res with
+  | Ok (), Ok blocks -> Lwt.return_ok blocks
+  | Error err, _ -> Lwt.return_error (R.msgf "%a" Mimic.pp_write_error err)
+  | _, Error err -> Lwt.return_error (R.msgf "%a" Mimic.pp_error err)
 
 let handler flow =
-  let queue = Ke.Rke.create ~capacity:0x1000 Bigarray.char in
-  let rec go flow queue =
-    getline flow queue >>? function
-    | `Close -> Lwt.return_ok ()
-    | (`Line "ping") ->
-      sendline flow "pong" >>? fun () -> go flow queue
-    | (`Line "pong") ->
-      sendline flow "ping" >>? fun () -> go flow queue
-    | (`Line line) ->
-      sendline flow "%s" line >>? fun () -> go flow queue in
-  Logs.debug (fun m -> m "Start to handle our client.") ;
-  go flow queue >>= fun res ->
-  Mimic.close flow >>= fun () -> Lwt.return res
+  let queue, _ = Ke.Rke.Weighted.create ~capacity:0x1000 Bigarray.char in
+  let block = Cstruct.create 0x1000 in
+  let close = ref false in
+  let mutex = Lwt_mutex.create () in
+  let condition = Lwt_condition.create () in
 
-let handler flow = handler flow >>= function
+  let rec producer flow =
+    Mimic.read flow >>? function
+    | `Eof ->
+      Lwt_mutex.with_lock mutex @@ begin fun () ->
+      close := true ;
+      Lwt_condition.broadcast condition `Closed ;
+      Lwt.return_unit end >>= fun () ->
+      Lwt.return_ok ()
+    | `Data cs ->
+      Logs.debug (fun m -> m "Recv @[<hov>%a@]"
+        (Hxd_string.pp Hxd.default) (Cstruct.to_string cs)) ;
+      let rec fill cs =
+        Lwt_mutex.with_lock mutex @@ begin fun () ->
+        let blit src src_off dst dst_off len =
+          let dst = Cstruct.of_bigarray dst ~off:dst_off ~len in
+          Cstruct.blit src src_off dst 0 len in
+        match min (Cstruct.length cs) (Ke.Rke.Weighted.available queue) with
+        | 0 ->
+          Lwt_condition.signal condition `Full ;
+          Lwt.return (`Redo cs)
+        | len ->
+          let _ = Ke.Rke.Weighted.N.push_exn queue ~blit
+            ~length:Cstruct.length ~len cs in
+          Lwt_condition.signal condition `Filled ;
+          if Cstruct.length cs - len = 0
+          then Lwt.return `Next 
+          else Lwt.return (`Redo (Cstruct.shift cs len)) end >>= function
+        | `Redo cs -> Lwt.pause () >>= fun () -> fill cs
+        | `Next -> Lwt.return_unit in
+      fill cs >>= fun () -> producer flow in
+
+  let rec consumer flow =
+    Lwt_mutex.with_lock mutex @@ begin fun () ->
+    let rec wait res =
+      if Ke.Rke.Weighted.is_empty queue && not !close
+      then Lwt_condition.wait ~mutex condition >>= wait
+      else Lwt.return res in
+    wait `Filled >>= function
+    | (`Full | `Filled | `Closed) as state ->
+      let blit src src_off dst dst_off len =
+        let src = Cstruct.of_bigarray src ~off:src_off ~len in
+        Cstruct.blit src 0 dst dst_off len in
+      let len = min (Ke.Rke.Weighted.length queue) (Cstruct.length block) in
+      Ke.Rke.Weighted.N.keep_exn queue ~blit ~length:Cstruct.length block ~len ;
+      Ke.Rke.Weighted.N.shift_exn queue len ;
+      let block = Cstruct.sub block 0 len in
+      Logs.debug (fun m -> m "Send @[<hov>%a@]"
+        (Hxd_string.pp Hxd.default) (Cstruct.to_string block)) ;
+      ( if Cstruct.length block > 0
+        then Mimic.write flow block 
+        else Lwt.return_ok () ) >>? fun () ->
+      ( match state with
+      | `Closed ->
+        Logs.debug (fun m -> m "The connection was closed by the client.") ;
+        Lwt.return_ok `Closed
+      | `Full | `Filled -> Lwt.return_ok `Continue ) end >>? function
+    | `Closed -> Lwt.return_ok ()
+    | `Continue -> Lwt.pause () >>= fun () -> consumer flow in
+
+  Lwt.both (producer flow) (consumer flow) >>= fun (p, c) ->
+  Mimic.close flow >>= fun () -> match p, c with
+  | Ok (), Ok () -> Lwt.return_ok ()
+  | Error err, _ -> Lwt.return_error (R.msgf "%a" Mimic.pp_error err)
+  | _, Error err -> Lwt.return_error (R.msgf "%a" Mimic.pp_write_error err)
+
+let handler stop flow = handler flow >>= fun res ->
+  Lwt_switch.turn_off stop >>= fun () -> match res with
   | Ok () -> Lwt.return_unit
   | Error err ->
     Fmt.epr "Got an error: %a.\n%!" Mimic.pp_error err ;
@@ -252,7 +329,7 @@ let ctx () =
                 req m_ipaddr; dft m_port 9009 ] ~k:k1 ctx in
   Lwt.return ctx
 
-let run ipaddr password =
+let run filename ipaddr password =
   let client () =
     let g = Random.State.make_self_init () in
     ctx () >>= fun ctx ->
@@ -261,27 +338,30 @@ let run ipaddr password =
     let identity = Unix.gethostname () in
     let ctx = Mimic.add m_server_identity identity ctx in
     let ctx = Mimic.add m_password password ctx in
-    client ~ctx stdin >>= function
-    | Ok () -> Lwt.return_unit
+    Lwt_unix.openfile filename Unix.[ O_RDONLY ] 0o644 >>= fun fd ->
+    Lwt_unix.stat filename >>= fun stat ->
+    client ~ctx fd stat.Unix.st_size >>= function
+    | Ok _blocks-> Lwt.return_unit
     | Error err ->
       Fmt.epr "%a.\n%!" Mimic.pp_error err ;
       Lwt.return_unit in
   let server () =
+    let stop = Lwt_switch.create () in
     let g = Random.State.make_self_init () in
     let sockaddr = Unix.ADDR_INET (Ipaddr_unix.to_inet_addr ipaddr, 9009) in
     let domain = Unix.domain_of_sockaddr sockaddr in
     let socket = Lwt_unix.socket domain Unix.SOCK_STREAM 0 in
     Lwt_unix.bind socket sockaddr >>= fun () ->
     Lwt_unix.listen socket 40 ;
-    let `Initialized th = serve_when_ready ~handler
+    let `Initialized th = serve_when_ready ~stop ~handler:(handler stop)
       (service ~g password) socket in
     th in
   Lwt.both (client ()) (server ()) >>= fun ((), ()) ->
   Lwt.return_unit
 
 let () = match Sys.argv with
-  | [| _; ipaddr; password; |] ->
+  | [| _; filename; ipaddr; password; |] when Sys.file_exists filename ->
     ( match Ipaddr.of_string ipaddr with
-    | Ok ipaddr -> Lwt_main.run (run ipaddr password)
-    | Error _ -> Fmt.epr "%s <ipaddr> <password>\n%!" Sys.argv.(0) )
-  | _ -> Fmt.epr "%s <ipaddr> <password>\n%!" Sys.argv.(0)
+    | Ok ipaddr -> Lwt_main.run (run filename ipaddr password)
+    | Error _ -> Fmt.epr "%s <filename> <ipaddr> <password>\n%!" Sys.argv.(0) )
+  | _ -> Fmt.epr "%s <filename> <ipaddr> <password>\n%!" Sys.argv.(0)

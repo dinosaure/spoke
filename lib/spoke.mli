@@ -28,6 +28,8 @@ type error =
 
 val pp_error : error Fmt.t
 
+val version : int
+
 val generate :
   ?hash:hash ->
   ?ciphers:cipher * cipher ->

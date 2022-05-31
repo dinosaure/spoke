@@ -210,7 +210,8 @@ end
 
 let generate : type a.
   ?hash:hash -> ?ciphers:cipher * cipher -> ?g:Random.State.t -> password:string -> algorithm:a algorithm -> a -> string * string 
-  = fun ?(hash= Hash Digestif.SHA256) ?(ciphers= AEAD GCM, AEAD GCM) ?g ~password ~algorithm arguments ->
+  = fun ?(hash= Hash Digestif.SHA256) ?(ciphers= AEAD GCM, AEAD ChaCha20_Poly1305)
+    ?g ~password ~algorithm arguments ->
   let salt = random_bytes ?g 16 in
   let keys, arguments = keys ~salt ~hash password ~algorithm arguments in
   let Hash hash = hash in
