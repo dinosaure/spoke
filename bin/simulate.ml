@@ -300,7 +300,7 @@ let m_password = Mimic.make ~name:"password"
 let m_tcp = Mimic.make ~name:"tcp"
 let m_ipaddr = Mimic.make ~name:"ipaddr"
 let m_port = Mimic.make ~name:"port"
-let m_domain_name = Mimic.make ~name:"domain-name"
+let m_domain_name : [ `host ] Domain_name.t Mimic.value = Mimic.make ~name:"domain-name"
 
 let ctx () =
   let k0 domain_name =

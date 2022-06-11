@@ -77,7 +77,7 @@ let random_buffer ?g buf =
   let len1 = len asr 2 in
   for i = 0 to len1 - 1 do
     let i = i * 4 in
-    bytes_set_uint32 buf i (Random.State.bits32 g)
+    bytes_set_uint32 buf i (Random.State.int32 g Int32.max_int)
   done ;
   for i = 0 to len0 - 1 do
     let i = (len1 * 4) + i in
@@ -369,7 +369,7 @@ type server =
   ; shared_keys : string * string
   ; ciphers     : cipher * cipher }
 
-let server_compute ?g ~secret ~identity packet =
+let server_compute ?g ~secret ~identity _X =
   match Format.secret_of_string secret with
   | Error _ -> Error `Invalid_secret_packet
   | Ok ((_version, (_algorithm, _arguments), ciphers, _hash, _salt),
@@ -377,16 +377,15 @@ let server_compute ?g ~secret ~identity packet =
     let y = random_scalar ?g () in
     let gy = ed25519_scalarmult_base_noclamp y ~off:0 in
     let _Y = ed25519_add gy _N in
-    let _X = Scalar packet in
+    let _X = Scalar _X in
     let gx = ed25519_sub _X _M in
     let* _Z = ed25519_scalarmult_noclamp y ~off:0 ~point:gx in
     let* _V = ed25519_scalarmult_noclamp y ~off:0 ~point:_L in
     let shared_keys, validators = shared_keys_and_validators ~identity _X _Y _Z h_K _V in
-    Ok ({ shared_keys; validator= snd validators; ciphers; }, ((scalar _Y) ^ (fst validators)))
+    Ok ({ shared_keys; validator= snd validators; ciphers; }, ((scalar _Y), (fst validators)))
 
-let client_compute ~client ~identity packet =
-  let client_validator = String.sub packet 32 (String.length packet - 32) in
-  let _Y = Scalar (String.sub packet 0 32) in
+let client_compute ~client ~identity _Y client_validator =
+  let _Y = Scalar _Y in
   let gy = ed25519_sub _Y client._N in
   let* _Z = ed25519_scalarmult_noclamp client.x ~off:0 ~point:gy in
   let* _V = ed25519_scalarmult client.h_L ~off:0 ~point:gy in
@@ -395,7 +394,7 @@ let client_compute ~client ~identity packet =
   then Ok (shared_keys, snd validators)
   else Error `Invalid_client_validator
 
-let server_finalize ~server packet =
-  if Eqaf.compare_le server.validator packet = 0
+let server_finalize ~server server_validator =
+  if Eqaf.compare_le server.validator server_validator = 0
   then Ok server.shared_keys
   else Error `Invalid_server_validator

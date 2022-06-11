@@ -21,4 +21,8 @@ depends: [
   "logs"
   "base64"
   "digestif"
+  "encore"
+  "ke"
+  "mirage-crypto"
+  "mirage-flow"
 ]

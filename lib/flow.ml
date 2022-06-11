@@ -148,19 +148,14 @@ type cfg =
 let handshake_client ctx
   ?g ~identity password =
   let* public = recv ctx ~len:34 in
-  Log.debug (fun m -> m "[c] <~ @[<hov>%a@]" (Hxd_string.pp Hxd.default) public) ;
   let+ public = Spoke.public_of_string public in
   let+ ciphers = Spoke.ciphers_of_public public in
   let+ client, packet = Spoke.hello ?g ~public password in
-  Log.debug (fun m -> m "[c] ~> @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
   let* () = send ctx packet in
   let* packet = recv ctx ~len:96 in
-  Log.debug (fun m -> m "[c] <~ @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
   let+ shared_keys, packet = Spoke.client_compute
-    ~client ~identity packet in
-  Log.debug (fun m -> m "[c] ~> @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
+    ~client ~identity (String.sub packet 0 32) (String.sub packet 32 64) in
   let* () = send ctx packet in
-  Log.debug (fun m -> m "Client terminates.") ;
   return (ciphers, shared_keys)
 
 let handshake_server ctx
@@ -168,19 +163,42 @@ let handshake_server ctx
   let secret, public = Spoke.generate ?g ~password
     ~algorithm arguments in
   let+ ciphers = Spoke.ciphers_of_public public in
-  Log.debug (fun m -> m "[s] ~> @[<hov>%a@]" (Hxd_string.pp Hxd.default) (Spoke.public_to_string public)) ;
   let* () = send ctx (Spoke.public_to_string public) in
   let* packet = recv ctx ~len:32 in
-  Log.debug (fun m -> m "[s] <~ @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
-  let+ server, packet = Spoke.server_compute ~secret ~identity
+  let+ server, (_Y, validator) = Spoke.server_compute ~secret ~identity
     packet in
-  Log.debug (fun m -> m "[s] ~> @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
-  let* () = send ctx packet in
+  let* () = send ctx (_Y ^ validator) in
   let* packet = recv ctx ~len:64 in
-  Log.debug (fun m -> m "[s] <~ @[<hov>%a@]" (Hxd_string.pp Hxd.default) packet) ;
   let+ shared_keys = Spoke.server_finalize ~server packet in
-  Log.debug (fun m -> m "Server terminates.") ;
   return (ciphers, shared_keys)
+
+(*
+module State_machine = struct
+  type t =
+    { secret : Spoke.secret
+    ; queue : recv Queue.t
+    ; server_identity : string }
+
+  let engine t = match Queue.pop t.queue with
+    | `Relay, `Client (uid, client_identity, _X) ->
+      ( match Spoke.server_compute ~g ~secret:t.secret
+          ~identity:(client_identity, t.server_identity) _X with
+      | Ok (state, _Y) ->
+        Hashtbl.add t.clients uid state ;
+        `Send (uid, Ok (_Y, t.server_identity))
+      | Error _ -> `Send (uid, Error "Invalid X") )
+    | `Client uid, `Validator client_validator ->
+      ( match Hashtbl.find_opt t.clients uid with
+      | None -> `Nop
+      | Some server ->
+        match Spoke.server_finalize ~server client_validator with
+        | Ok sk ->
+          Hashtbl.iter (fun uid _server -> `Send (`Relay, `Close uid)) t.clients ;
+          `Send (`Relay, Ok ())
+        | Error _ -> `Send (`Relay, Error "Invalid validator") )
+    | exception Queue.Empty
+end
+*)
 
 module type CIPHER_BLOCK = sig
   type key
@@ -334,7 +352,7 @@ module Make (Flow : Mirage_flow.S) = struct
     Ke.Rke.N.push recv_queue ~blit ~length:String.length rem ;
     let send_queue = Ke.Rke.create ~capacity:0x10000 Bigarray.char in
     let recv_record =
-      let Symmetric { impl= (module Cipher_block); _ } = send in
+      let Symmetric { impl= (module Cipher_block); _ } = recv in
       Cstruct.create (2 + max_record + Cipher_block.tag_size) in
     let send_record =
       let Symmetric { impl= (module Cipher_block); _ } = send in
@@ -361,7 +379,7 @@ module Make (Flow : Mirage_flow.S) = struct
     Ke.Rke.N.push recv_queue ~blit ~length:String.length rem ;
     let send_queue = Ke.Rke.create ~capacity:0x10000 Bigarray.char in
     let recv_record =
-      let Symmetric { impl= (module Cipher_block); _ } = send in
+      let Symmetric { impl= (module Cipher_block); _ } = recv in
       Cstruct.create (2 + max_record + Cipher_block.tag_size) in
     let send_record =
       let Symmetric { impl= (module Cipher_block); _ } = send in
@@ -412,11 +430,8 @@ module Make (Flow : Mirage_flow.S) = struct
   let rec read flow =
     match get_record flow.recv_record flow.recv_queue flow.recv with
     | `Record buf ->
-      Logs.debug (fun m -> m "Record [recv]: @[<hov>%a@]"
-        (Hxd_string.pp Hxd.default) (Cstruct.to_string buf)) ;
       ( match decrypt flow.recv flow.recv_seq buf with
       | Some buf (* copy *) ->
-        Logs.debug (fun m -> m "Decrypt %d byte(s)." (Cstruct.length buf)) ;
         flow.recv_seq <- Int64.succ flow.recv_seq ;
         Lwt.return_ok (`Data buf)
       | None -> Lwt.return_error `Corrupted )
@@ -440,7 +455,6 @@ module Make (Flow : Mirage_flow.S) = struct
       let src = Cstruct.of_bigarray src ~off:src_off ~len in
       Cstruct.blit src 0 dst dst_off len in
     Ke.Rke.N.keep_exn queue ~length:Cstruct.length ~blit ~off:2 ~len dst ;
-    Logs.debug (fun m -> m "Encrypt %d byte(s)." len) ;
     let buf (* copy *) = encrypt symmetric sequence (Cstruct.sub dst 2 len) in
     Ke.Rke.N.shift_exn queue len ;
     let len = 2 + Cstruct.length buf in
@@ -454,8 +468,6 @@ module Make (Flow : Mirage_flow.S) = struct
            ~dst:flow.send_record ~sequence:flow.send_seq
            flow.send_queue flow.send in
          ( flow.send_seq <- Int64.succ flow.send_seq
-         ; Logs.debug (fun m -> m "Record [send]: @[<hov>%a@]"
-             (Hxd_string.pp Hxd.default) Cstruct.(to_string (sub record 2 (length record - 2))))
          ; Flow.write flow.flow record >>? fun () ->
            (* XXX(dinosaure): reset [send_record]? *)
            flush flow )
