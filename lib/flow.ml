@@ -172,34 +172,6 @@ let handshake_server ctx
   let+ shared_keys = Spoke.server_finalize ~server packet in
   return (ciphers, shared_keys)
 
-(*
-module State_machine = struct
-  type t =
-    { secret : Spoke.secret
-    ; queue : recv Queue.t
-    ; server_identity : string }
-
-  let engine t = match Queue.pop t.queue with
-    | `Relay, `Client (uid, client_identity, _X) ->
-      ( match Spoke.server_compute ~g ~secret:t.secret
-          ~identity:(client_identity, t.server_identity) _X with
-      | Ok (state, _Y) ->
-        Hashtbl.add t.clients uid state ;
-        `Send (uid, Ok (_Y, t.server_identity))
-      | Error _ -> `Send (uid, Error "Invalid X") )
-    | `Client uid, `Validator client_validator ->
-      ( match Hashtbl.find_opt t.clients uid with
-      | None -> `Nop
-      | Some server ->
-        match Spoke.server_finalize ~server client_validator with
-        | Ok sk ->
-          Hashtbl.iter (fun uid _server -> `Send (`Relay, `Close uid)) t.clients ;
-          `Send (`Relay, Ok ())
-        | Error _ -> `Send (`Relay, Error "Invalid validator") )
-    | exception Queue.Empty
-end
-*)
-
 module type CIPHER_BLOCK = sig
   type key
 
