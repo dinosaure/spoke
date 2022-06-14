@@ -225,6 +225,7 @@ let generate : type a.
 
 let public_to_string str = str
 let public_of_string str = Ok str
+let public_of_secret secret = String.sub secret 0 34
 
 let zero = String.make 32 '\000'
 

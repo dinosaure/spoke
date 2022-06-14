@@ -82,6 +82,7 @@ val generate :
 val public_to_string : public -> string
 val public_of_string : string -> (public, [> error ]) result
 val ciphers_of_public : public -> (cipher * cipher, [> error ]) result
+val public_of_secret : secret -> public
 
 val hello :
   ?g:Random.State.t ->
