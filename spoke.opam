@@ -25,4 +25,7 @@ depends: [
   "ke"
   "mirage-crypto"
   "mirage-flow"
+  "mimic"       {with-test}
+  "rresult"     {with-test}
+  "tcpip"       {with-test}
 ]
