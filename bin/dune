@@ -1,4 +1,12 @@
 (executable
  (name simulate)
- (enabled_if (= %{context_name} "default"))
- (libraries mimic rresult tcpip.stack-socket logs logs.fmt fmt.tty hxd.string hxd.core spoke flow base64))
+ (libraries
+  mimic
+  rresult
+  tcpip.stack-socket
+  logs
+  hxd.string
+  hxd.core
+  spoke
+  flow
+  base64))

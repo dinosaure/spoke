@@ -65,25 +65,37 @@
 *)
 
 type client
+(** The type of a client. *)
+
 type server
+(** The type of a server. *)
 
 type hash = Hash : 'k Digestif.hash -> hash
+(** The hash algorithm. *)
 
+(** The [KDF] (Key Derivation Function) used to generate common informations
+    between client & server. *)
 type 'a algorithm =
   | Pbkdf2 : int algorithm
 
+(** The type of Authenticated Encryptions with Associated Data. *)
 type _ aead =
   | GCM : Mirage_crypto.Cipher_block.AES.GCM.key aead
   | CCM : Mirage_crypto.Cipher_block.AES.CCM.key aead
   | ChaCha20_Poly1305 : Mirage_crypto.Chacha20.key aead
 
+(** The type of ciphers. *)
 type cipher =
   | AEAD : 'k aead -> cipher
 
 type public
+(** The type of the public part of the handshake. *)
+
 type secret
+(** The type of the secret part of the handshake. *)
 
 type shared_keys = string * string
+(** The type of shared keys. *)
 
 type error =
   [ `Point_is_not_on_prime_order_subgroup
@@ -91,10 +103,13 @@ type error =
   | `Invalid_server_validator
   | `Invalid_public_packet
   | `Invalid_secret_packet ]
+(** The type of errors. *)
 
 val pp_error : error Fmt.t
+(** The pretty-printer of {!type:error}. *)
 
 val version : int
+(** The version of the handshake. *)
 
 val generate :
   ?hash:hash ->
@@ -103,17 +118,34 @@ val generate :
   password:string ->
   algorithm:'a algorithm -> 'a ->
   secret * public
+(** [generate ?hash ?ciphers ?g ~password ~algorithm v] generates the
+    {!type:public} and the {!type:secret} informations used to handle the
+    handshake for a server. *)
 
 val public_to_string : public -> string
+(** [public_to_string public] serializes the {!type:public} information into
+    bytes. Therefore, the public information can be transmitted to a client
+    throught a (secured?) channel. *)
+
 val public_of_string : string -> (public, [> error ]) result
-val ciphers_of_public : public -> (cipher * cipher, [> error ]) result
+(** [public_of_string str] tries to deserialize a serie of bytes to a public
+    information. *)
+
+val ciphers_of_public : string -> (cipher * cipher, [> error ]) result
+(** [ciphers_of_public str] returns ciphers announced by the {!type:public}
+    information serialized. *)
+
 val public_of_secret : secret -> public
+(** [public_of_secret secret] regenerates {!type:public} from {!type:secret}. *)
 
 val hello :
   ?g:Random.State.t ->
-  public:public ->
+  public:string ->
   string ->
   (client * string, [> error ]) result
+(** [hello ?g ~public password] tries to create a {!type:client} information
+    from a serialized {!type:public} one and a [password]. It generates a
+    curve point which should be transmitted to the server. *)
 
 val server_compute :
   ?g:Random.State.t ->
@@ -121,14 +153,36 @@ val server_compute :
   identity:string * string ->
   string ->
   (server * (string * string), [> error ]) result
+(** [server_compute ?g ~secret ~identity:(client, server) _X] tries to validate
+    [_X] with the given {!type:secret} information and identities. It returns
+    a {!type:server} information if it succeed as well as a curve point [_Y]
+    and a {i client validator}. [_Y] and [client_validator] should be
+    transmitted to the client.
+    
+    {b NOTE}: identities is something known to both parties. The client must
+    recognise the server with a unique identifier (like ["Bob"]) and the
+    server must recognise the client with a unique identifier (like ["Alice"]).
+    But more concretely, the identifier can be the IP address as well as the
+    port of each of the two peers. *)
 
 val client_compute :
   client:client ->
   identity:(string * string) ->
   string -> string ->
   (shared_keys * string, [> error ]) result
+(** [client_compute ~client ~identity:(client, server) _Y client_validator]
+    tries to validate [_Y] and the [client_validator] with the given
+    {!type:client} information and identities (for more details, about
+    identities, you can look at the note for {!val:server_compute}). It
+    returns {!type:shared_keys} and the server validator if it succeed. The
+    [server_validator] should be transmitted to the server. *)
 
 val server_finalize :
   server:server ->
   string ->
   (shared_keys, [> error ]) result
+(** [server_finalize ~server server_validator] finalizes the handshake and
+    tries to validate the given [server_validator] with the given
+    {!type:server} information. If it succeed, it returns the
+    {!type:shared_keys}. Then, the user is able to initiate a secure
+    communication with the given client. *)

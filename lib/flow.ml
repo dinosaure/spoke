@@ -148,7 +148,6 @@ type cfg =
 let handshake_client ctx
   ?g ~identity password =
   let* public = recv ctx ~len:34 in
-  let+ public = Spoke.public_of_string public in
   let+ ciphers = Spoke.ciphers_of_public public in
   let+ client, packet = Spoke.hello ?g ~public password in
   let* () = send ctx packet in
@@ -160,9 +159,9 @@ let handshake_client ctx
 
 let handshake_server ctx
   ?g ~password ~identity (Cfg (algorithm, arguments)) =
-  let secret, public = Spoke.generate ?g ~password
+  let ciphers = Spoke.(AEAD GCM, AEAD ChaCha20_Poly1305) in
+  let secret, public = Spoke.generate ?g ~password ~ciphers
     ~algorithm arguments in
-  let+ ciphers = Spoke.ciphers_of_public public in
   let* () = send ctx (Spoke.public_to_string public) in
   let* packet = recv ctx ~len:32 in
   let+ server, (_Y, validator) = Spoke.server_compute ~secret ~identity
