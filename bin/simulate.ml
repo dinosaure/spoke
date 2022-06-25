@@ -1,22 +1,3 @@
-let reporter ppf =
-  let report src level ~over k msgf =
-    let k _ =
-      over () ;
-      k () in
-    let with_metadata header _tags k ppf fmt =
-      Format.kfprintf k ppf
-        ("[%a]%a[%a]: " ^^ fmt ^^ "\n%!")
-        Fmt.(styled `Blue int)
-        (Unix.getpid ()) Logs_fmt.pp_header (level, header)
-        Fmt.(styled `Magenta string)
-        (Logs.Src.name src) in
-    msgf @@ fun ?header ?tags fmt -> with_metadata header tags k ppf fmt in
-  { Logs.report }
-
-let () = Fmt_tty.setup_std_outputs ~style_renderer:`Ansi_tty ~utf_8:true ()
-let () = Logs.set_reporter (reporter Fmt.stderr)
-let () = Logs.set_level ~all:true (Some Logs.Debug)
-
 open Rresult
 open Lwt.Infix
 
@@ -94,7 +75,7 @@ let client ~ctx fd fd_length =
   Lwt.both (producer flow) (consumer flow 0) >>= fun res ->
   Logs.debug (fun m -> m "Close the connection with the server.") ;
   Mimic.close flow >>= fun () -> match res with
-  | Ok (), Ok blocks -> Lwt.return_ok blocks
+  | Ok (), Ok () -> Lwt.return_ok ()
   | Error err, _ -> Lwt.return_error (R.msgf "%a" Mimic.pp_write_error err)
   | _, Error err -> Lwt.return_error (R.msgf "%a" Mimic.pp_error err)
 
@@ -302,7 +283,7 @@ let m_ipaddr = Mimic.make ~name:"ipaddr"
 let m_port = Mimic.make ~name:"port"
 let m_domain_name : [ `host ] Domain_name.t Mimic.value = Mimic.make ~name:"domain-name"
 
-let ctx () =
+let ctx ~port =
   let k0 domain_name =
     match Unix.gethostbyname (Domain_name.to_string domain_name) with
     | { Unix.h_addr_list; _ } when Array.length h_addr_list > 0 ->
@@ -326,13 +307,13 @@ let ctx () =
     Mimic.Fun.[ req m_domain_name ] ~k:k0 ctx in
   let ctx = Mimic.fold spoke_edn
     Mimic.Fun.[ opt m_g; req m_server_identity; req m_password; req m_tcp;
-                req m_ipaddr; dft m_port 9009 ] ~k:k1 ctx in
+                req m_ipaddr; dft m_port port ] ~k:k1 ctx in
   Lwt.return ctx
 
-let run filename ipaddr password =
+let run filename (ipaddr, port) password =
   let client () =
     let g = Random.State.make_self_init () in
-    ctx () >>= fun ctx ->
+    ctx ~port >>= fun ctx ->
     let ctx = Mimic.add m_ipaddr ipaddr ctx in
     let ctx = Mimic.add m_g g ctx in
     let identity = Unix.gethostname () in
@@ -341,14 +322,14 @@ let run filename ipaddr password =
     Lwt_unix.openfile filename Unix.[ O_RDONLY ] 0o644 >>= fun fd ->
     Lwt_unix.stat filename >>= fun stat ->
     client ~ctx fd stat.Unix.st_size >>= function
-    | Ok _blocks-> Lwt.return_unit
+    | Ok () -> Lwt.return_unit
     | Error err ->
       Fmt.epr "%a.\n%!" Mimic.pp_error err ;
       Lwt.return_unit in
   let server () =
     let stop = Lwt_switch.create () in
     let g = Random.State.make_self_init () in
-    let sockaddr = Unix.ADDR_INET (Ipaddr_unix.to_inet_addr ipaddr, 9009) in
+    let sockaddr = Unix.ADDR_INET (Ipaddr_unix.to_inet_addr ipaddr, port) in
     let domain = Unix.domain_of_sockaddr sockaddr in
     let socket = Lwt_unix.socket domain Unix.SOCK_STREAM 0 in
     Lwt_unix.bind socket sockaddr >>= fun () ->
@@ -361,7 +342,7 @@ let run filename ipaddr password =
 
 let () = match Sys.argv with
   | [| _; filename; ipaddr; password; |] when Sys.file_exists filename ->
-    ( match Ipaddr.of_string ipaddr with
-    | Ok ipaddr -> Lwt_main.run (run filename ipaddr password)
-    | Error _ -> Fmt.epr "%s <filename> <ipaddr> <password>\n%!" Sys.argv.(0) )
-  | _ -> Fmt.epr "%s <filename> <ipaddr> <password>\n%!" Sys.argv.(0)
+    ( match Ipaddr.with_port_of_string ~default:9000 ipaddr with
+    | Ok addr -> Lwt_main.run (run filename addr password)
+    | Error _ -> Fmt.epr "%s <filename> <addr>[:<port>] <password>\n%!" Sys.argv.(0) )
+  | _ -> Fmt.epr "%s <filename> <addr>[:<port>] <password>\n%!" Sys.argv.(0)
