@@ -287,6 +287,11 @@ let ciphers_of_public public =
   | Error _ -> Error `Invalid_public_packet
   | Ok (_, _, ciphers, _, _) -> Ok ciphers
 
+let ciphers_of_secret secret =
+  match Format.secret_of_string secret with
+  | Error _ -> invalid_arg "Invalid secret value"
+  | Ok ((_, _, ciphers, _, _), _) -> ciphers
+
 type error =
   [ `Point_is_not_on_prime_order_subgroup
   | `Invalid_client_validator

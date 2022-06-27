@@ -138,6 +138,11 @@ val ciphers_of_public : string -> (cipher * cipher, [> error ]) result
 val ciphers_of_client : client -> cipher * cipher
 (** [ciphers_of_client client] returns ciphers from a {!type:client} value. *)
 
+val ciphers_of_secret : secret -> cipher * cipher
+(** [ciphers_of_secret secret] returns ciphers from a {!type:secret} value.
+
+    @raise [Invalid_argument] if the [secret] value is malformed. *)
+
 val public_of_secret : secret -> public
 (** [public_of_secret secret] regenerates {!type:public} from {!type:secret}. *)
 
