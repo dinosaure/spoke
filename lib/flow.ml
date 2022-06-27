@@ -235,16 +235,16 @@ module Make (Flow : Mirage_flow.S) = struct
   let make_adata len =
     let buf = Cstruct.create 4 in
     Cstruct.BE.set_uint16 buf 0 Spoke.version ;
-    Cstruct.BE.set_uint16 buf 0 len ; buf
+    Cstruct.BE.set_uint16 buf 2 len ; buf
 
   let encrypt (Symmetric { key; nonce; impl= (module Cipher_block); }) sequence buf =
     let nonce = make_nonce nonce sequence in
-    let adata = make_adata (Cstruct.length buf + Cipher_block.tag_size) in
+    let adata = make_adata (Cstruct.length buf) in
     Cipher_block.authenticate_encrypt ~key ~adata ~nonce buf
 
   let decrypt (Symmetric { key; nonce; impl= (module Cipher_block); }) sequence buf =
     let nonce = make_nonce nonce sequence in
-    let adata = make_adata (Cstruct.length buf) in
+    let adata = make_adata (Cstruct.length buf - Cipher_block.tag_size) in
     Cipher_block.authenticate_decrypt ~key ~adata ~nonce buf
 
   let symmetric_of_key_nonce_and_cipher key_nonce (Spoke.AEAD aead) =

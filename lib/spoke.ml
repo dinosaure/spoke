@@ -265,6 +265,8 @@ type client =
   ; _X      : scalar
   ; ciphers : cipher * cipher }
 
+let ciphers_of_client { ciphers; _ } = ciphers
+
 let hello ?g ~public password =
   match Format.public_of_string public with
   | Error _ -> Error `Invalid_public_packet

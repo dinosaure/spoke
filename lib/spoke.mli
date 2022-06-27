@@ -135,6 +135,9 @@ val ciphers_of_public : string -> (cipher * cipher, [> error ]) result
 (** [ciphers_of_public str] returns ciphers announced by the {!type:public}
     information serialized. *)
 
+val ciphers_of_client : client -> cipher * cipher
+(** [ciphers_of_client client] returns ciphers from a {!type:client} value. *)
+
 val public_of_secret : secret -> public
 (** [public_of_secret secret] regenerates {!type:public} from {!type:secret}. *)
 
