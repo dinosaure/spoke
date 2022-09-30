@@ -70,13 +70,11 @@ type client
 type server
 (** The type of a server. *)
 
-type hash = Hash : 'k Digestif.hash -> hash
-(** The hash algorithm. *)
+type hash = Hash : 'k Digestif.hash -> hash  (** The hash algorithm. *)
 
 (** The [KDF] (Key Derivation Function) used to generate common informations
     between client & server. *)
-type 'a algorithm =
-  | Pbkdf2 : int algorithm
+type 'a algorithm = Pbkdf2 : int algorithm
 
 (** The type of Authenticated Encryptions with Associated Data. *)
 type _ aead =
@@ -85,8 +83,7 @@ type _ aead =
   | ChaCha20_Poly1305 : Mirage_crypto.Chacha20.key aead
 
 (** The type of ciphers. *)
-type cipher =
-  | AEAD : 'k aead -> cipher
+type cipher = AEAD : 'k aead -> cipher
 
 type public
 (** The type of the public part of the handshake. *)
@@ -116,7 +113,8 @@ val generate :
   ?ciphers:cipher * cipher ->
   ?g:Random.State.t ->
   password:string ->
-  algorithm:'a algorithm -> 'a ->
+  algorithm:'a algorithm ->
+  'a ->
   secret * public
 (** [generate ?hash ?ciphers ?g ~password ~algorithm v] generates the
     {!type:public} and the {!type:secret} informations used to handle the
@@ -175,8 +173,9 @@ val server_compute :
 
 val client_compute :
   client:client ->
-  identity:(string * string) ->
-  string -> string ->
+  identity:string * string ->
+  string ->
+  string ->
   (shared_keys * string, [> error ]) result
 (** [client_compute ~client ~identity:(client, server) _Y client_validator]
     tries to validate [_Y] and the [client_validator] with the given
@@ -186,9 +185,7 @@ val client_compute :
     [server_validator] should be transmitted to the server. *)
 
 val server_finalize :
-  server:server ->
-  string ->
-  (shared_keys, [> error ]) result
+  server:server -> string -> (shared_keys, [> error ]) result
 (** [server_finalize ~server server_validator] finalizes the handshake and
     tries to validate the given [server_validator] with the given
     {!type:server} information. If it succeed, it returns the
