@@ -23,7 +23,7 @@ depends: [
   "digestif"
   "encore"
   "ke"
-  "mirage-crypto"
+  "mirage-crypto" {>= "0.11.0"}
   "mirage-flow"
   "mimic"       {with-test}
   "rresult"     {with-test}

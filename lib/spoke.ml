@@ -92,7 +92,7 @@ type a = Algorithm : 'a algorithm -> a
 
 type _ aead =
   | GCM : Mirage_crypto.Cipher_block.AES.GCM.key aead
-  | CCM : Mirage_crypto.Cipher_block.AES.CCM.key aead
+  | CCM16 : Mirage_crypto.Cipher_block.AES.CCM16.key aead
   | ChaCha20_Poly1305 : Mirage_crypto.Chacha20.key aead
 
 type cipher = AEAD : 'k aead -> cipher
@@ -114,12 +114,12 @@ let hash_of_int : int -> hash = function
 
 let int_of_cipher = function
   | AEAD GCM -> 0
-  | AEAD CCM -> 1
+  | AEAD CCM16 -> 1
   | AEAD ChaCha20_Poly1305 -> 2
 
 let cipher_of_int = function
   | 0 -> AEAD GCM
-  | 1 -> AEAD CCM
+  | 1 -> AEAD CCM16
   | 2 -> AEAD ChaCha20_Poly1305
   | _ -> raise Invalid_cipher
 

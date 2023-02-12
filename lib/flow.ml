@@ -169,44 +169,12 @@ let handshake_server ctx ?g ~password ~identity (Cfg (algorithm, arguments)) =
   let+ shared_keys = Spoke.server_finalize ~server packet in
   return (ciphers, shared_keys)
 
-module type CIPHER_BLOCK = sig
-  type key
-
-  val authenticate_encrypt :
-    key:key -> nonce:Cstruct.t -> ?adata:Cstruct.t -> Cstruct.t -> Cstruct.t
-
-  val authenticate_decrypt :
-    key:key ->
-    nonce:Cstruct.t ->
-    ?adata:Cstruct.t ->
-    Cstruct.t ->
-    Cstruct.t option
-
-  val of_secret : Cstruct.t -> key
-  val tag_size : int
-end
-
-type 'k cipher_block = (module CIPHER_BLOCK with type key = 'k)
+type 'k cipher_block = (module Mirage_crypto.AEAD with type key = 'k)
 
 let module_of : type k. k Spoke.aead -> k cipher_block = function
   | Spoke.GCM -> (module Mirage_crypto.Cipher_block.AES.GCM)
-  | Spoke.CCM ->
-      let module M = struct
-        include Mirage_crypto.Cipher_block.AES.CCM
-
-        let of_secret =
-          of_secret ~maclen:16 (* XXX(dinosaure): [16] comes from [ocaml-tls] *)
-
-        let tag_size = 16
-      end in
-      (module M)
-  | Spoke.ChaCha20_Poly1305 ->
-      let module M = struct
-        include Mirage_crypto.Chacha20
-
-        let tag_size = Mirage_crypto.Poly1305.mac_size
-      end in
-      (module M)
+  | Spoke.CCM16 -> (module Mirage_crypto.Cipher_block.AES.CCM16)
+  | Spoke.ChaCha20_Poly1305 -> (module Mirage_crypto.Chacha20)
 
 module Make (Flow : Mirage_flow.S) = struct
   open Lwt.Infix
@@ -276,13 +244,13 @@ module Make (Flow : Mirage_flow.S) = struct
     let key_len =
       match aead with
       | Spoke.GCM -> 32
-      | Spoke.CCM -> 32
+      | Spoke.CCM16 -> 32
       | Spoke.ChaCha20_Poly1305 -> 32
     in
     let nonce_len =
       match aead with
       | Spoke.GCM -> 12
-      | Spoke.CCM -> 12
+      | Spoke.CCM16 -> 12
       | Spoke.ChaCha20_Poly1305 -> 12
     in
     let module Cipher_block = (val module_of aead) in
