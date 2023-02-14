@@ -79,7 +79,7 @@ type 'a algorithm = Pbkdf2 : int algorithm
 (** The type of Authenticated Encryptions with Associated Data. *)
 type _ aead =
   | GCM : Mirage_crypto.Cipher_block.AES.GCM.key aead
-  | CCM : Mirage_crypto.Cipher_block.AES.CCM.key aead
+  | CCM16 : Mirage_crypto.Cipher_block.AES.CCM16.key aead
   | ChaCha20_Poly1305 : Mirage_crypto.Chacha20.key aead
 
 (** The type of ciphers. *)
