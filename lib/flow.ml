@@ -472,6 +472,15 @@ module Make (Flow : Mirage_flow.S) = struct
 
   let read flow = read flow
   let write flow data = write flow data
-  let writev _flow _ccs = assert false
+
+  let writev flow css =
+    let rec go = function
+      | [] -> Lwt.return_ok ()
+      | cs :: css ->
+          write flow cs >>= function
+          | Ok () -> go css | Error err -> Lwt.return_error err in
+    go css
+
   let close { flow; _ } = Flow.close flow
+  let shutdown { flow; _ } value = Flow.shutdown flow value
 end
