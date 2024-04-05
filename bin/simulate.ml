@@ -276,6 +276,17 @@ module TCP = struct
     | x :: r -> write fd x >>? fun () -> writev fd r
 
   let close = Lwt_unix.close
+
+  let shutdown fd = function
+    | `read ->
+        Lwt_unix.shutdown fd Unix.SHUTDOWN_RECEIVE;
+        Lwt.return_unit
+    | `write ->
+        Lwt_unix.shutdown fd Unix.SHUTDOWN_SEND;
+        Lwt.return_unit
+    | `read_write ->
+        Lwt_unix.shutdown fd Unix.SHUTDOWN_ALL;
+        Lwt.return_unit
 end
 
 module SPOKEServer = struct
