@@ -476,9 +476,11 @@ module Make (Flow : Mirage_flow.S) = struct
   let writev flow css =
     let rec go = function
       | [] -> Lwt.return_ok ()
-      | cs :: css ->
+      | cs :: css -> (
           write flow cs >>= function
-          | Ok () -> go css | Error err -> Lwt.return_error err in
+          | Ok () -> go css
+          | Error err -> Lwt.return_error err)
+    in
     go css
 
   let close { flow; _ } = Flow.close flow

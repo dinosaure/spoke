@@ -160,7 +160,7 @@ let handler flow =
                 (Hxd_string.pp Hxd.default)
                 (Cstruct.to_string block));
           (if Cstruct.length block > 0 then Mimic.write flow block
-          else Lwt.return_ok ())
+           else Lwt.return_ok ())
           >>? fun () ->
           match state with
           | `Closed ->

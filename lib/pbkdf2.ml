@@ -27,7 +27,7 @@
 external xor_into :
   string -> src_off:int -> bytes -> dst_off:int -> len:int -> unit
   = "spoke_xor_into_generic"
-  [@@noalloc]
+[@@noalloc]
 
 external bytes_set_int32 : bytes -> int -> int32 -> unit = "%caml_bytes_set32"
 external lessequal : 'a -> 'a -> bool = "%lessequal"
@@ -35,7 +35,7 @@ external lessequal : 'a -> 'a -> bool = "%lessequal"
 let imin (a : int) b =
   let ( <= ) (x : int) y = lessequal x y in
   if a <= b then a else b
-  [@@inline]
+[@@inline]
 
 let xor_into src ~src_off dst ~dst_off ~len =
   if len > imin (String.length src) (Bytes.length dst) then
@@ -51,7 +51,7 @@ let xor str0 str1 =
 let ( // ) x y =
   if y < 1 then raise Division_by_zero;
   if x > 0 then 1 + ((x - 1) / y) else 0
-  [@@inline]
+[@@inline]
 
 (* XXX(dinosaure): implementation of PBKDF 2 from ocaml-pbkdf without the
  * mirage-crypto dependency. ocaml-pbkdf is under the BSD-2-Clause license.
