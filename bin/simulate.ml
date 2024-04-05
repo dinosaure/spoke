@@ -160,7 +160,7 @@ let handler flow =
                 (Hxd_string.pp Hxd.default)
                 (Cstruct.to_string block));
           (if Cstruct.length block > 0 then Mimic.write flow block
-          else Lwt.return_ok ())
+           else Lwt.return_ok ())
           >>? fun () ->
           match state with
           | `Closed ->
@@ -276,6 +276,17 @@ module TCP = struct
     | x :: r -> write fd x >>? fun () -> writev fd r
 
   let close = Lwt_unix.close
+
+  let shutdown fd = function
+    | `read ->
+        Lwt_unix.shutdown fd Unix.SHUTDOWN_RECEIVE;
+        Lwt.return_unit
+    | `write ->
+        Lwt_unix.shutdown fd Unix.SHUTDOWN_SEND;
+        Lwt.return_unit
+    | `read_write ->
+        Lwt_unix.shutdown fd Unix.SHUTDOWN_ALL;
+        Lwt.return_unit
 end
 
 module SPOKEServer = struct

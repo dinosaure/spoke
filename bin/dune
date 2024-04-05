@@ -1,6 +1,7 @@
 (executable
  (name simulate)
  (libraries
+  logs.fmt
   mimic
   rresult
   tcpip.stack-socket
