@@ -172,8 +172,8 @@ let handshake_server ctx ?g ~password ~identity (Cfg (algorithm, arguments)) =
 type 'k cipher_block = (module Mirage_crypto.AEAD with type key = 'k)
 
 let module_of : type k. k Spoke.aead -> k cipher_block = function
-  | Spoke.GCM -> (module Mirage_crypto.Cipher_block.AES.GCM)
-  | Spoke.CCM16 -> (module Mirage_crypto.Cipher_block.AES.CCM16)
+  | Spoke.GCM -> (module Mirage_crypto.AES.GCM)
+  | Spoke.CCM16 -> (module Mirage_crypto.AES.CCM16)
   | Spoke.ChaCha20_Poly1305 -> (module Mirage_crypto.Chacha20)
 
 module Make (Flow : Mirage_flow.S) = struct
@@ -220,25 +220,27 @@ module Make (Flow : Mirage_flow.S) = struct
       let pad = Cstruct.create (len - 8) in
       Cstruct.append pad seq
     in
-    xor nonce seq
+    Cstruct.to_string (xor nonce seq)
 
   let make_adata len =
     let buf = Cstruct.create 4 in
     Cstruct.BE.set_uint16 buf 0 Spoke.version;
     Cstruct.BE.set_uint16 buf 2 len;
-    buf
+    Cstruct.to_string buf
 
   let encrypt (Symmetric { key; nonce; impl = (module Cipher_block) }) sequence
       buf =
     let nonce = make_nonce nonce sequence in
     let adata = make_adata (Cstruct.length buf) in
-    Cipher_block.authenticate_encrypt ~key ~adata ~nonce buf
+    Cipher_block.authenticate_encrypt ~key ~adata ~nonce (Cstruct.to_string buf)
+    |> Cstruct.of_string
 
   let decrypt (Symmetric { key; nonce; impl = (module Cipher_block) }) sequence
       buf =
     let nonce = make_nonce nonce sequence in
     let adata = make_adata (Cstruct.length buf - Cipher_block.tag_size) in
-    Cipher_block.authenticate_decrypt ~key ~adata ~nonce buf
+    Cipher_block.authenticate_decrypt ~key ~adata ~nonce (Cstruct.to_string buf)
+    |> Option.map Cstruct.of_string
 
   let symmetric_of_key_nonce_and_cipher key_nonce (Spoke.AEAD aead) =
     let key_len =
@@ -254,7 +256,7 @@ module Make (Flow : Mirage_flow.S) = struct
       | Spoke.ChaCha20_Poly1305 -> 12
     in
     let module Cipher_block = (val module_of aead) in
-    let key = Cstruct.of_string ~off:0 ~len:key_len key_nonce in
+    let key = String.sub key_nonce 0 key_len in
     Log.debug (fun m ->
         m "Private key: %s" (Base64.encode_exn (String.sub key_nonce 0 key_len)));
     let key = Cipher_block.of_secret key in

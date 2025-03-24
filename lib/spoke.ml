@@ -91,8 +91,8 @@ type _ algorithm = Pbkdf2 : int algorithm
 type a = Algorithm : 'a algorithm -> a
 
 type _ aead =
-  | GCM : Mirage_crypto.Cipher_block.AES.GCM.key aead
-  | CCM16 : Mirage_crypto.Cipher_block.AES.CCM16.key aead
+  | GCM : Mirage_crypto.AES.GCM.key aead
+  | CCM16 : Mirage_crypto.AES.CCM16.key aead
   | ChaCha20_Poly1305 : Mirage_crypto.Chacha20.key aead
 
 type cipher = AEAD : 'k aead -> cipher
@@ -123,8 +123,7 @@ let cipher_of_int = function
   | 2 -> AEAD ChaCha20_Poly1305
   | _ -> raise Invalid_cipher
 
-let keys :
-    type a.
+let keys : type a.
     salt:string ->
     hash:hash ->
     string ->
@@ -218,8 +217,7 @@ module Format = struct
     Angstrom.parse_string ~consume:All (Encore.to_angstrom public) str
 end
 
-let generate :
-    type a.
+let generate : type a.
     ?hash:hash ->
     ?ciphers:cipher * cipher ->
     ?g:Random.State.t ->
