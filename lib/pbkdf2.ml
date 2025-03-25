@@ -58,8 +58,7 @@ let ( // ) x y =
  *
  * Copyright (c) 2016, Alfredo Beaumont, Sonia Meruelo
  * All rights reserved. *)
-let generate :
-    type hash.
+let generate : type hash.
     hash Digestif.hash ->
     password:string ->
     salt:string ->

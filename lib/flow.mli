@@ -77,10 +77,10 @@ val ctx : unit -> ctx
 (** [ctx ()] creates a fresh {!type:ctx}. *)
 
 val remaining_bytes_of_ctx : ctx -> string option
-(** [remaining_bytes_of_ctx ctx] returns bytes which are not consumed
-    by the handshake but they are already consumed by the [read] {i syscall}.
-    In other words, at the end of the handshake, you may read more than you
-    needed to and this function allows you to recover the excess. *)
+(** [remaining_bytes_of_ctx ctx] returns bytes which are not consumed by the
+    handshake but they are already consumed by the [read] {i syscall}. In other
+    words, at the end of the handshake, you may read more than you needed to and
+    this function allows you to recover the excess. *)
 
 type error = [ `Not_enough_space | `End_of_input | `Spoke of Spoke.error ]
 (** The type of errors. *)
@@ -109,8 +109,8 @@ val handshake_client :
   ((Spoke.cipher * Spoke.cipher) * Spoke.shared_keys) t
 (** [handshake_client ctx ~identity password] returns a {!type:t} which leads
     users when they need to read or write. If the handshake succeed, we return
-    {!type:Spoke.cipher}s and {!type:Spoke.shared_keys}. Otherwise, we return
-    an error. *)
+    {!type:Spoke.cipher}s and {!type:Spoke.shared_keys}. Otherwise, we return an
+    error. *)
 
 val handshake_server :
   ctx ->
