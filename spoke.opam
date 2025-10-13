@@ -11,7 +11,7 @@ synopsis:     "SPAKE+EE implementation in OCaml"
 description: """A Password-authenticated key agreement protocol in OCaml"""
 
 build: [ "dune" "build" "-p" name "-j" jobs ]
-run-test: [ "dune" "runtest" "-p" name "-j" jobs ] {os != "macos"}
+run-test: [ "dune" "runtest" "-p" name "-j" jobs ] {os != "macos" & arch != "x86_32" & arch != "arm32"}
 
 depends: [
   "ocaml"         {>= "4.08.0"}
@@ -19,6 +19,7 @@ depends: [
   "fmt"
   "hxd"
   "logs"
+  "cstruct"       {>= "6.0.0"}
   "base64"        {>= "3.0.0"}
   "digestif"      {>= "0.8.1"}
   "bigstringaf"   {>= "0.9.0"}
@@ -32,3 +33,5 @@ depends: [
   "rresult"       {with-test}
   "tcpip"         {with-test}
 ]
+
+x-maintenance-intent: [ "(latest)" ]

@@ -1,3 +1,7 @@
+## v0.0.4 (2025-10-03) Paris - France
+
+- Update to `mirage-crypto.1.0.0` (@dinosaure, #10)
+
 ## v0.0.3 (2024-07-12) Tokyo - Japon
 
 - Fix deprecation (@dinosaure, #5)
